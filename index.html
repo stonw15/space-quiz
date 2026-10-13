@@ -136,6 +136,38 @@
       letter-spacing: 0.12em;
     }
 
+    .header-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sound-toggle {
+      font: inherit;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--text-main);
+      background: var(--surface-bg);
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      padding: 4px 7px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .sound-toggle:hover,
+    .sound-toggle:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    @media (max-width: 360px) {
+      .app-title-badge {
+        display: none;
+      }
+    }
+
     @keyframes blinkSignal {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.4; transform: scale(0.85); }
@@ -500,27 +532,34 @@
 <body>
 
   <main class="container">
+    <header class="quiz-header">
+      <h1 class="app-title" aria-label="Mission Control: Cosmic Quest Online">
+        <span class="app-title-left">
+          <span class="mission-indicator" aria-hidden="true"></span>
+          <span>COSMIC QUEST</span>
+        </span>
+        <span class="header-controls">
+          <span class="app-title-badge" aria-hidden="true">SYS:LIVE</span>
+          <button class="sound-toggle" id="sound-toggle" type="button" aria-label="Sound" aria-pressed="true">
+            <span id="sound-toggle-icon" aria-hidden="true">🔊</span>
+            <span id="sound-toggle-label">SOUND ON</span>
+          </button>
+        </span>
+      </h1>
+    </header>
+
     <!-- Quiz Playing View -->
     <section id="quiz-view">
-      <header class="quiz-header">
-        <h1 class="app-title" aria-label="Mission Control: Cosmic Quest Online">
-          <span class="app-title-left">
-            <span class="mission-indicator" aria-hidden="true"></span>
-            <span>COSMIC QUEST</span>
-          </span>
-          <span class="app-title-badge" aria-hidden="true">SYS:LIVE</span>
-        </h1>
-        <div class="status-row">
-          <span id="question-progress">Question 1 of 10</span>
-          <div class="score-badge" aria-live="polite">
-            <span>Score:</span>
-            <strong id="score-counter">0</strong>
-          </div>
+      <div class="status-row">
+        <span id="question-progress">Question 1 of 10</span>
+        <div class="score-badge" aria-live="polite">
+          <span>Score:</span>
+          <strong id="score-counter">0</strong>
         </div>
-        <div class="progress-bar-track" role="progressbar" aria-valuemin="1" aria-valuemax="10" aria-valuenow="1" id="progress-bar">
-          <div class="progress-bar-fill" id="progress-fill"></div>
-        </div>
-      </header>
+      </div>
+      <div class="progress-bar-track" role="progressbar" aria-valuemin="1" aria-valuemax="10" aria-valuenow="1" id="progress-bar">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
 
       <article class="question-card">
         <div class="question-category" id="question-category">Deep Space</div>
@@ -659,8 +698,97 @@
     const resultsSubtitle = document.getElementById("results-subtitle");
     const finalScore = document.getElementById("final-score");
     const accuracyPercent = document.getElementById("accuracy-percent");
+    const soundToggle = document.getElementById("sound-toggle");
+    const soundToggleIcon = document.getElementById("sound-toggle-icon");
+    const soundToggleLabel = document.getElementById("sound-toggle-label");
 
     const optionLabels = ["A", "B", "C", "D"];
+    const soundPreferenceKey = "cosmicQuestSoundEnabled";
+    let audioContext = null;
+    let masterGain = null;
+    let soundEnabled = true;
+
+    try {
+      soundEnabled = localStorage.getItem(soundPreferenceKey) !== "false";
+    } catch (error) {
+      console.warn("Could not load the saved sound preference.", error);
+    }
+
+    function updateSoundToggle() {
+      soundToggle.setAttribute("aria-pressed", String(soundEnabled));
+      soundToggleIcon.textContent = soundEnabled ? "🔊" : "🔇";
+      soundToggleLabel.textContent = soundEnabled ? "SOUND ON" : "SOUND OFF";
+      if (masterGain) {
+        masterGain.gain.cancelScheduledValues(audioContext.currentTime);
+        masterGain.gain.value = soundEnabled ? 1 : 0;
+      }
+    }
+
+    function getAudioContext() {
+      if (!audioContext) {
+        const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextConstructor) {
+          console.warn("Web Audio API is not available in this browser.");
+          return null;
+        }
+        audioContext = new AudioContextConstructor();
+        masterGain = audioContext.createGain();
+        masterGain.gain.value = soundEnabled ? 1 : 0;
+        masterGain.connect(audioContext.destination);
+      }
+      return audioContext;
+    }
+
+    function scheduleTone(context, frequency, startTime, duration, waveform, volume) {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = waveform;
+      oscillator.frequency.setValueAtTime(frequency, startTime);
+      gain.gain.setValueAtTime(0.0001, startTime);
+      gain.gain.exponentialRampToValueAtTime(volume, startTime + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      oscillator.connect(gain);
+      gain.connect(masterGain);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + duration + 0.02);
+    }
+
+    function synthesizeSound(context, type) {
+      const now = context.currentTime + (type === "select" ? 0 : 0.09);
+      if (type === "select") {
+        scheduleTone(context, 740, now, 0.09, "sine", 0.045);
+      } else if (type === "correct") {
+        scheduleTone(context, 660, now, 0.18, "sine", 0.06);
+        scheduleTone(context, 880, now + 0.12, 0.22, "sine", 0.06);
+        scheduleTone(context, 1109, now + 0.27, 0.34, "sine", 0.055);
+      } else if (type === "incorrect") {
+        scheduleTone(context, 190, now, 0.3, "sawtooth", 0.045);
+        scheduleTone(context, 155, now + 0.12, 0.32, "square", 0.025);
+      } else if (type === "fanfare") {
+        scheduleTone(context, 523, now, 0.24, "triangle", 0.055);
+        scheduleTone(context, 659, now + 0.16, 0.24, "triangle", 0.055);
+        scheduleTone(context, 784, now + 0.32, 0.24, "triangle", 0.055);
+        scheduleTone(context, 1047, now + 0.48, 0.55, "triangle", 0.06);
+      }
+    }
+
+    function playSound(type) {
+      if (!soundEnabled) return;
+
+      const context = getAudioContext();
+      if (!context) return;
+      const play = () => {
+        if (soundEnabled) synthesizeSound(context, type);
+      };
+
+      if (context.state === "suspended") {
+        context.resume().then(play).catch((error) => {
+          console.warn("Could not resume the audio context.", error);
+        });
+      } else {
+        play();
+      }
+    }
 
     function initQuiz() {
       currentQuestionIdx = 0;
@@ -717,6 +845,9 @@
       const buttons = optionsGrid.querySelectorAll(".option-btn");
       const isCorrect = selectedIndex === q.correctIndex;
 
+      playSound("select");
+      playSound(isCorrect ? "correct" : "incorrect");
+
       if (isCorrect) {
         score++;
         scoreCounter.textContent = score;
@@ -769,6 +900,7 @@
     function showResults() {
       quizView.style.display = "none";
       resultsView.classList.add("active");
+      playSound("fanfare");
 
       const total = questions.length;
       const pct = Math.round((score / total) * 100);
@@ -804,8 +936,24 @@
       restartBtn.focus();
     }
 
-    nextBtn.addEventListener("click", proceedToNext);
-    restartBtn.addEventListener("click", initQuiz);
+    nextBtn.addEventListener("click", () => {
+      playSound("select");
+      proceedToNext();
+    });
+    restartBtn.addEventListener("click", () => {
+      playSound("select");
+      initQuiz();
+    });
+    soundToggle.addEventListener("click", () => {
+      soundEnabled = !soundEnabled;
+      updateSoundToggle();
+      try {
+        localStorage.setItem(soundPreferenceKey, String(soundEnabled));
+      } catch (error) {
+        console.warn("Could not save the sound preference.", error);
+      }
+      if (soundEnabled) playSound("select");
+    });
 
     // Keyboard support: 1-4 or A-D to answer, Enter/Space/ArrowRight for Next/Restart
     window.addEventListener("keydown", (e) => {
@@ -813,6 +961,7 @@
       if (resultsView.classList.contains("active")) {
         if (e.key === "Enter" || e.key === " " || e.key === "r" || e.key === "R") {
           e.preventDefault();
+          playSound("select");
           initQuiz();
         }
         return;
@@ -822,6 +971,7 @@
       if (answered) {
         if (e.key === "Enter" || e.key === " " || e.key === "ArrowRight") {
           e.preventDefault();
+          playSound("select");
           proceedToNext();
         }
         return;
@@ -841,6 +991,7 @@
       }
     });
 
+    updateSoundToggle();
     initQuiz();
   </script>
 </body>
